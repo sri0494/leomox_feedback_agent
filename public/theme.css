@@ -1,0 +1,30 @@
+/* LeoMox brand theme (colours estimated from the logo; adjust to your brand guide). Light + dark. */
+:root{--lm-green-500:#5cb338;--lm-green-600:#3f9a2e;--lm-green-100:#e6f4df;--lm-blue-500:#3d9bd6;--lm-navy-900:#0b1020;
+--bg:#f6f8fb;--surface:#fff;--text:#0b1020;--muted:#566074;--border:#dbe1ea;--primary:#3f9a2e;--primary-hover:#348326;--primary-contrast:#fff;--accent:#3d9bd6;--tint:#e6f4df;--danger:#b42318;--warn:#a15c07;--radius:10px;
+--shadow:0 1px 2px rgba(11,16,32,.06),0 4px 14px rgba(11,16,32,.06);--grad:linear-gradient(135deg,#5cb338,#3d9bd6);color-scheme:light;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0b1020;--surface:#131a2e;--text:#e8ecf5;--muted:#9aa5bd;--border:#25304d;--primary:#5cb338;--primary-hover:#74c853;--primary-contrast:#0b1020;--tint:#16301f;--danger:#f2766b;--warn:#e0a24a;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#0b1020;--surface:#131a2e;--text:#e8ecf5;--muted:#9aa5bd;--border:#25304d;--primary:#5cb338;--primary-hover:#74c853;--primary-contrast:#0b1020;--tint:#16301f;--danger:#f2766b;--warn:#e0a24a;color-scheme:dark}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent)}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hdr{background:var(--lm-navy-900);color:#fff;border-bottom:3px solid transparent;border-image:var(--grad) 1;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.hdr img{width:36px;height:36px}.hdr h1{font-size:17px;margin:0}.hdr .sp{flex:1}.hdr small{color:#b9c3da}
+.badge{background:var(--warn);color:#fff;border-radius:99px;font-size:11px;padding:2px 9px}
+nav{display:flex;gap:4px;overflow-x:auto;padding:10px 16px 0;max-width:1180px;margin:auto}
+nav button{border:0;background:none;color:var(--muted);padding:8px 12px;border-radius:8px 8px 0 0;cursor:pointer;font:inherit;white-space:nowrap;border-bottom:2px solid transparent}
+nav button.on{color:var(--primary);border-color:var(--primary);font-weight:600}
+main{max-width:1180px;margin:auto;padding:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.k{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px}.k b{font-size:24px;display:block}.k span{color:var(--muted);font-size:12px}
+h2{font-size:16px;margin:0 0 8px}h3{font-size:14px;margin:12px 0 4px}.mu{color:var(--muted)}
+.btn,select,input,textarea{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px}
+.btn{cursor:pointer}.btn.p{background:var(--primary);color:var(--primary-contrast);border-color:var(--primary);font-weight:600}.btn.p:hover{background:var(--primary-hover)}.btn:disabled{opacity:.5;cursor:not-allowed}
+textarea{width:100%;min-height:80px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}th{color:var(--muted);font-weight:600}
+tr.cl{cursor:pointer}tr.cl:hover{background:var(--tint)}
+.pill{display:inline-block;border-radius:99px;padding:1px 9px;font-size:12px;background:var(--tint);color:var(--primary)}.pill.er{background:transparent;border:1px solid var(--danger);color:var(--danger)}.pill.wr{background:transparent;border:1px solid var(--warn);color:var(--warn)}
+.note{border-left:3px solid var(--warn);padding:6px 10px;background:var(--tint);border-radius:4px;font-size:13px;margin:8px 0}.err{color:var(--danger)}
+.bar{height:8px;background:var(--border);border-radius:4px;overflow:hidden;flex:1;min-width:80px}.bar i{display:block;height:100%;background:var(--grad)}
+.empty{color:var(--muted);text-align:center;padding:22px}.tl{border-left:2px solid var(--border);margin-left:6px;padding-left:12px}.tl div{margin:6px 0}
+.login{max-width:380px;margin:9vh auto;padding:0 16px}.login .card{padding:22px}.login img{width:72px;height:72px;display:block;margin:0 auto 8px}.login h1{text-align:center;font-size:20px;margin:0 0 4px}
+.login label{display:block;font-size:13px;color:var(--muted);margin-top:10px}.login input{width:100%}

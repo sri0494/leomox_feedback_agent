@@ -1,0 +1,20 @@
+export const DEFAULT_QUESTIONS = {
+  en: ["Hello, this is an automated assistant collecting feedback on local public services. It takes about two minutes. You may skip any question or end the call at any time. Is now a good time?",
+    "How would you describe drinking-water availability in your area over the past month?",
+    "How would you describe drainage and sanitation near your home?",
+    "How would you describe the roads and public facilities you use?",
+    "Have you been able to access ration or pension services when needed?",
+    "Have you contacted the relevant office or representative about a concern, and did you receive a response?"],
+  te: ["నమస్కారం, ఇది స్థానిక ప్రజా సేవలపై అభిప్రాయాలు సేకరించే ఆటోమేటెడ్ అసిస్టెంట్ కాల్. దీనికి సుమారు రెండు నిమిషాలు పడుతుంది. మీరు ఏ ప్రశ్నను అయినా దాటవేయవచ్చు లేదా ఎప్పుడైనా కాల్ ముగించవచ్చు. ఇప్పుడు మాట్లాడవచ్చా?",
+    "గత నెలలో మీ ప్రాంతంలో తాగునీటి లభ్యత ఎలా ఉంది?",
+    "మీ ఇంటి సమీపంలో డ్రైనేజీ మరియు పారిశుద్ధ్యం ఎలా ఉంది?",
+    "మీరు ఉపయోగించే రోడ్లు మరియు ప్రజా సౌకర్యాల పరిస్థితి ఎలా ఉంది?",
+    "అవసరమైనప్పుడు రేషన్ లేదా పింఛన్ సేవలు మీకు అందాయా?",
+    "మీ సమస్య గురించి సంబంధిత కార్యాలయాన్ని లేదా ప్రతినిధిని సంప్రదించారా, స్పందన వచ్చిందా?"],
+  hi: ["नमस्ते, यह स्थानीय सार्वजनिक सेवाओं पर प्रतिक्रिया लेने वाली एक स्वचालित असिस्टेंट कॉल है। इसमें लगभग दो मिनट लगेंगे। आप कोई भी प्रश्न छोड़ सकते हैं या कभी भी कॉल समाप्त कर सकते हैं। क्या अभी बात कर सकते हैं?",
+    "पिछले एक महीने में आपके क्षेत्र में पीने के पानी की उपलब्धता कैसी रही?",
+    "आपके घर के पास नाली और स्वच्छता की स्थिति कैसी है?",
+    "आप जिन सड़कों और सार्वजनिक सुविधाओं का उपयोग करते हैं, उनकी स्थिति कैसी है?",
+    "ज़रूरत पड़ने पर क्या आपको राशन या पेंशन सेवाएँ मिल सकीं?",
+    "क्या आपने किसी समस्या के लिए संबंधित कार्यालय या प्रतिनिधि से संपर्क किया, और जवाब मिला?"]
+};

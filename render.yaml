@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: leomox-feedback-agent
+    runtime: node
+    region: singapore
+    plan: free            # free plans sleep when idle; use a paid plan for production traffic
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPERADMIN_EMAIL
+        sync: false
+      - key: SUPERADMIN_PASSWORD
+        sync: false
+      - key: WEBHOOK_SIGNING_SECRET
+        generateValue: true
+      - key: SESSION_IDLE_MINUTES
+        value: 15
+      - key: SESSION_MAX_HOURS
+        value: 12
+      - key: AUTO_MIGRATE
+        value: true
