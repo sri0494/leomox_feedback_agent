@@ -101,7 +101,7 @@ test('manual suppression is honoured before dialling', async () => {
 
 test('calling window enforced when mock override is off', async () => {
   const { t, m, c } = await setup({ mockIgnoreWindow: false });
-  await m.req('PATCH', `/api/campaigns/${c.id}`, { window_start: '00:00', window_end: '00:01' });
+  await m.req('PATCH', `/api/campaigns/${c.id}`, { version: c.version, window_start: '00:00', window_end: '00:01' });
   await m.post(`/api/campaigns/${c.id}/contacts/import`, { csv: CSV }); await m.post(`/api/campaigns/${c.id}/status`, { status: 'active' });
   const r = (await m.post(`/api/campaigns/${c.id}/run`, { limit: 100 })).json;
   assert.equal(r.claimed, 0); assert.equal(r.deferred_window, 11);
@@ -112,14 +112,17 @@ test('calling window enforced when mock override is off', async () => {
 test('campaign lifecycle rules, script validation and recording audit', async () => {
   const { t, m, c } = await setup(); const ad = t.client(); await ad.login('admin@t.io');
   assert.equal((await m.post(`/api/campaigns/${c.id}/status`, { status: 'paused' })).status, 409);
-  await m.post(`/api/campaigns/${c.id}/status`, { status: 'active' }); await m.post(`/api/campaigns/${c.id}/status`, { status: 'paused' });
+  const noc = await m.post(`/api/campaigns/${c.id}/status`, { status: 'active' }); assert.equal(noc.status, 409); assert.equal(noc.json.code, 'NO_ELIGIBLE_CONTACTS');
+  await m.post(`/api/campaigns/${c.id}/contacts/import`, { csv: CSV });
+  assert.equal((await m.post(`/api/campaigns/${c.id}/status`, { status: 'active' })).status, 200); await m.post(`/api/campaigns/${c.id}/status`, { status: 'paused' });
   assert.equal((await m.post(`/api/campaigns/${c.id}/status`, { status: 'active' })).status, 200);
   await m.post(`/api/campaigns/${c.id}/status`, { status: 'closed' });
   assert.equal((await m.post(`/api/campaigns/${c.id}/status`, { status: 'active' })).status, 409);
-  assert.equal((await m.put(`/api/campaigns/${c.id}/questions`, { questions: { en: ['x'], te: [], hi: [] } })).status, 400);
   const dup = await m.post(`/api/campaigns/${c.id}/duplicate`); assert.equal(dup.json.status, 'draft');
-  assert.equal((await m.req('PATCH', `/api/campaigns/${dup.json.id}`, { recording: 'on' })).status, 200);
-  const logs = (await ad.get('/api/audit')).json; assert.ok(logs.some((l) => l.action === 'recording_policy_change'));
+  assert.equal((await m.put(`/api/campaigns/${dup.json.id}/questions`, { questions: { en: ['x'], te: [], hi: [] } })).status, 400);
+  assert.equal((await m.put(`/api/campaigns/${c.id}/questions`, { questions: dup.json.questions })).status, 409, 'closed campaigns are read-only');
+  assert.equal((await m.req('PATCH', `/api/campaigns/${dup.json.id}`, { version: dup.json.version, recording: 'on' })).status, 200);
+  assert.ok((await ad.get('/api/audit')).json.some((l) => l.action === 'recording_policy_change'));
   assert.equal((await m.post('/api/campaigns', { name: '', language: 'zz' })).status, 400);
   await t.close();
 });

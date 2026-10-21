@@ -1,3 +1,4 @@
+process.env.BCRYPT_COST = '4';
 import { newDb } from 'pg-mem';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
@@ -20,7 +21,7 @@ export async function boot(over = {}) {
   await migrate(pool, () => {});
   const cfg = { ...loadConfig({ NODE_ENV: 'test', WEBHOOK_SIGNING_SECRET: 'whsec_test_123' }), ...over };
   for (const [email, role] of [['super@t.io', 'SUPER_ADMIN'], ['admin@t.io', 'ADMIN'], ['mgr@t.io', 'MANAGER'], ['view@t.io', 'VIEWER']])
-    await pool.query('INSERT INTO users (id,email,name,password_hash,role) VALUES ($1,$2,$3,$4,$5)', [crypto.randomUUID(), email, role, bcrypt.hashSync(PW, 4), role]);
+    await pool.query('INSERT INTO users (id,email,name,password_hash,role,password_changed_at) VALUES ($1,$2,$3,$4,$5,$6)', [crypto.randomUUID(), email, role, bcrypt.hashSync(PW, 4), role, new Date()]);
   const app = createApp({ pool, cfg, telephony: createMockTelephony(mulberry32(over.seed ?? 7)) });
   const server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -68,3 +69,7 @@ export const CSV = `mobile_number,preferred_language,locality,mandal,constituenc
 9523456789,te,Ward 4,,,granted,2026-09-06,c
 9434567890,te,Ward 1,,,granted,2026-09-07,c`;
 export const campaignBody = (o = {}) => ({ name: 'Test campaign', language: 'te', ...o });
+
+export const reauth = { reauth_password: PW };
+export async function loginAs(t, email) { const c = t.client(); const r = await c.login(email); if (r.status !== 200) throw new Error('login failed ' + email + ' ' + r.text); return c; }
+export const tokenFrom = (link) => decodeURIComponent(link.split('=').slice(1).join('='));

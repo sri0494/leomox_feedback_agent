@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 
 export const ROLES = ['VIEWER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'];
 export const atLeast = (role, min) => ROLES.indexOf(role) >= ROLES.indexOf(min);
-const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+export const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const TAB = /^[a-f0-9]{16,64}$/;
 const cookieName = (tab) => 'lm_sid_' + tab.slice(0, 16);
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 10);
@@ -34,12 +34,12 @@ export function createAuth({ pool, cfg, audit }) {
     const sid = parseCookies(req.headers.cookie)[cookieName(tab)];
     if (!sid) return { code: 'UNAUTHENTICATED', tab };
     const { rows } = await pool.query(
-      'SELECT s.*, u.email, u.name, u.role, u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.sid_hash=$1', [sha(sid)]);
+      'SELECT s.*, u.email, u.name, u.role, u.status, u.campaign_scope, u.can_archive FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.sid_hash=$1', [sha(sid)]);
     const s = rows[0];
     if (!s || s.tab_id !== tab) return { code: 'UNAUTHENTICATED', tab };
     const now = Date.now();
     if (s.revoked_at) return { code: 'SESSION_EXPIRED', tab };
-    if (!s.active) { await revoke(s.id); return { code: 'UNAUTHENTICATED', tab }; }
+    if (s.status !== 'active') { await revoke(s.id); return { code: 'UNAUTHENTICATED', tab }; }
     if (now - new Date(s.last_seen_at).getTime() > cfg.idleMs || now > new Date(s.expires_at).getTime()) {
       await revoke(s.id);
       return { code: 'SESSION_EXPIRED', tab };
@@ -66,8 +66,11 @@ export function createAuth({ pool, cfg, audit }) {
         if (!sameOrigin(req) || !safeEq(req.get('x-csrf-token') || '', r.s.csrf_token))
           return res.status(403).json({ error: 'CSRF validation failed', code: 'CSRF' });
       }
-      if (!atLeast(r.s.role, minRole)) return res.status(403).json({ error: 'Insufficient role', code: 'FORBIDDEN' });
-      req.user = { id: r.s.user_id, email: r.s.email, name: r.s.name, role: r.s.role };
+      if (!atLeast(r.s.role, minRole)) {
+        await audit(r.s.user_id, 'access_denied', `${req.method} ${req.path} requires ${minRole}, role ${r.s.role}`);
+        return res.status(403).json({ error: 'Insufficient role', code: 'FORBIDDEN' });
+      }
+      req.user = { id: r.s.user_id, email: r.s.email, name: r.s.name, role: r.s.role, scope: r.s.campaign_scope, canArchive: !!r.s.can_archive };
       req.sess = { id: r.s.id, csrf: r.s.csrf_token };
       next();
     } catch (e) { next(e); }
@@ -75,7 +78,7 @@ export function createAuth({ pool, cfg, audit }) {
 
   const loginLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, try later' } });
   const info = (user, s) => ({
-    user: { id: user.id ?? user.user_id, email: user.email, name: user.name, role: user.role },
+    user: { id: user.id ?? user.user_id, email: user.email, name: user.name, role: user.role, canArchive: !!user.can_archive, campaignScope: user.campaign_scope || 'all' },
     csrfToken: s.csrf_token ?? s.csrf, idleSeconds: cfg.idleMs / 1000, maxSeconds: cfg.maxMs / 1000
   });
 
@@ -91,7 +94,7 @@ export function createAuth({ pool, cfg, audit }) {
         const now = new Date();
         const locked = u?.locked_until && new Date(u.locked_until) > now;
         const ok = await bcrypt.compare(password, u?.password_hash || DUMMY_HASH);
-        if (!u || !u.active || locked || !ok) {
+        if (!u || u.status !== 'active' || locked || !ok) {
           if (u && !locked) {
             const f = u.failed_attempts + 1;
             await pool.query('UPDATE users SET failed_attempts=$1, locked_until=$2 WHERE id=$3', [f >= 5 ? 0 : f, f >= 5 ? new Date(Date.now() + 15 * 60_000) : null, u.id]);
@@ -121,7 +124,7 @@ export function createAuth({ pool, cfg, audit }) {
           if (r.tab) res.clearCookie(cookieName(r.tab), cookieOpts);
           return res.status(401).json({ error: r.code === 'SESSION_EXPIRED' ? 'Your session has expired. Please log in again.' : 'Authentication required', code: r.code });
         }
-        res.json(info({ id: r.s.user_id, email: r.s.email, name: r.s.name, role: r.s.role }, r.s));
+        res.json(info({ id: r.s.user_id, email: r.s.email, name: r.s.name, role: r.s.role, can_archive: r.s.can_archive, campaign_scope: r.s.campaign_scope }, r.s));
       } catch (e) { next(e); }
     });
 
@@ -148,8 +151,27 @@ export async function seedSuperAdmin(pool, cfg) {
   if (!cfg.superEmail) return false;
   const ex = await pool.query('SELECT 1 FROM users WHERE email=$1', [cfg.superEmail]);
   if (ex.rows.length) return false; // never overwrite existing credentials
-  await pool.query('INSERT INTO users (id,email,name,password_hash,role) VALUES ($1,$2,$3,$4,$5)',
-    [newId(), cfg.superEmail, 'Super Admin', bcrypt.hashSync(cfg.superPassword, 12), 'SUPER_ADMIN']);
+  await pool.query('INSERT INTO users (id,email,name,password_hash,role,password_changed_at) VALUES ($1,$2,$3,$4,$5,$6)',
+    [newId(), cfg.superEmail, 'Super Admin', bcrypt.hashSync(cfg.superPassword, 12), 'SUPER_ADMIN', new Date()]);
   return true;
 }
-export const hashPassword = (p) => bcrypt.hashSync(p, 12);
+export const hashPassword = (p) => bcrypt.hashSync(p, Number(process.env.BCRYPT_COST) || 12);
+
+export const revokeUserSessions = (db, userId) => db.query('UPDATE sessions SET revoked_at=$1 WHERE user_id=$2 AND revoked_at IS NULL', [new Date(), userId]);
+const COMMON = new Set(['password', 'password1', 'password123', '1234567890', 'qwertyuiop', 'letmein123', 'admin12345', 'welcome123', 'changeme123']);
+export function passwordPolicy(pw, email = '') {
+  const e = [], p = String(pw || '');
+  if (p.length < 10) e.push('at least 10 characters');
+  if (p.length > 128) e.push('at most 128 characters');
+  if (!(/[a-z]/i.test(p) && /[0-9\W_]/.test(p))) e.push('letters plus at least one digit or symbol');
+  if (COMMON.has(p.toLowerCase())) e.push('not a common password');
+  const local = String(email).split('@')[0].toLowerCase();
+  if (local.length >= 4 && p.toLowerCase().includes(local)) e.push('must not contain your email name');
+  return e;
+}
+export const withTx = async (pool, fn) => {
+  const c = await pool.connect();
+  try { await c.query('BEGIN'); const r = await fn(c); await c.query('COMMIT'); return r; }
+  catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
+  finally { c.release(); }
+};

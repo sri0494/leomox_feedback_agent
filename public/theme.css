@@ -28,3 +28,8 @@ tr.cl{cursor:pointer}tr.cl:hover{background:var(--tint)}
 .empty{color:var(--muted);text-align:center;padding:22px}.tl{border-left:2px solid var(--border);margin-left:6px;padding-left:12px}.tl div{margin:6px 0}
 .login{max-width:380px;margin:9vh auto;padding:0 16px}.login .card{padding:22px}.login img{width:72px;height:72px;display:block;margin:0 auto 8px}.login h1{text-align:center;font-size:20px;margin:0 0 4px}
 .login label{display:block;font-size:13px;color:var(--muted);margin-top:10px}.login input{width:100%}
+
+.btn.er{border-color:var(--danger);color:var(--danger)}.btn.p.er{background:var(--danger);color:#fff}
+dialog{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);padding:18px;max-width:560px;width:calc(100% - 24px);box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(11,16,32,.55)}.fl{display:block;margin:10px 0 0;font-size:13px;color:var(--muted)}.fl input:not([type=checkbox]),.fl select{display:block;width:100%;margin-top:3px;color:var(--text)}
+dialog ul{margin:6px 0 6px 18px;padding:0}

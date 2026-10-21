@@ -2,7 +2,9 @@ import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAuth, newId, atLeast, ROLES, hashPassword } from './auth.js';
+import { createAuth, newId, atLeast, withTx } from './auth.js';
+import { mountCampaigns } from './campaigns.js';
+import { mountUsers } from './users.js';
 import { validateCsv, csvCell, mask } from './csv.js';
 import { DEFAULT_QUESTIONS } from './defaultScript.js';
 import { runCampaign } from './engine.js';
@@ -10,7 +12,7 @@ import { createMockTelephony, verifySignature, CATS } from './providers.js';
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const bad = (msg, status = 400) => Object.assign(new Error(msg), { status, expose: true });
+const bad = (msg, status = 400, code, extra) => Object.assign(new Error(msg), { status, expose: true, code, extra });
 const LANGS = ['te', 'en', 'hi'];
 const OUT = ['completed', 'declined', 'opted_out', 'no_answer', 'busy', 'failed'];
 const RANK = { initiated: 0, ringing: 1, no_answer: 2, busy: 2, failed: 2, declined: 3, completed: 4, opted_out: 5 };
@@ -52,55 +54,23 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
     return f;
   }
 
-  // ---- campaigns
-  app.get('/api/campaigns', need('VIEWER'), ah(async (_q, r) => r.json((await pool.query('SELECT id,name,purpose,language,status,window_start,window_end,retries,concurrency,recording,start_date,end_date,created_at FROM feedback_campaigns ORDER BY created_at DESC')).rows)));
-  app.post('/api/campaigns', need('MANAGER'), ah(async (req, res) => {
-    const f = campaignFields(req.body || {}); const id = newId();
-    await pool.query('INSERT INTO feedback_campaigns (id,name,purpose,language,start_date,end_date,window_start,window_end,max_duration_s,retries,concurrency,recording,questions,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
-      [id, f.name, f.purpose, f.language, f.start_date, f.end_date, f.window_start, f.window_end, f.max_duration_s, f.retries, f.concurrency, f.recording, JSON.stringify(DEFAULT_QUESTIONS), req.user.id]);
-    await audit(req.user.id, 'campaign_create', `${id} recording=${f.recording}`);
-    res.status(201).json(await getCampaign(id));
-  }));
-  app.get('/api/campaigns/:id', need('VIEWER'), ah(async (req, res) => res.json(await getCampaign(req.params.id))));
-  app.patch('/api/campaigns/:id', need('MANAGER'), ah(async (req, res) => {
-    const c = await getCampaign(req.params.id); if (c.status === 'closed') throw bad('Campaign is closed', 409);
-    const f = campaignFields({ ...c, ...req.body });
-    await pool.query('UPDATE feedback_campaigns SET name=$1,purpose=$2,language=$3,start_date=$4,end_date=$5,window_start=$6,window_end=$7,max_duration_s=$8,retries=$9,concurrency=$10,recording=$11 WHERE id=$12',
-      [f.name, f.purpose, f.language, f.start_date, f.end_date, f.window_start, f.window_end, f.max_duration_s, f.retries, f.concurrency, f.recording, c.id]);
-    if (f.recording !== c.recording) await audit(req.user.id, 'recording_policy_change', `${c.id} ${c.recording}->${f.recording}`);
-    res.json(await getCampaign(c.id));
-  }));
-  app.post('/api/campaigns/:id/duplicate', need('MANAGER'), ah(async (req, res) => {
-    const c = await getCampaign(req.params.id); const id = newId();
-    await pool.query('INSERT INTO feedback_campaigns (id,name,purpose,language,start_date,end_date,window_start,window_end,max_duration_s,retries,concurrency,recording,questions,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
-      [id, c.name + ' (copy)', c.purpose, c.language, c.start_date, c.end_date, c.window_start, c.window_end, c.max_duration_s, c.retries, c.concurrency, c.recording, JSON.stringify(c.questions), req.user.id]);
-    await audit(req.user.id, 'campaign_duplicate', `${c.id}->${id}`);
-    res.status(201).json(await getCampaign(id));
-  }));
-  const TRANS = { draft: ['active', 'closed'], active: ['paused', 'closed'], paused: ['active', 'closed'], closed: [] };
-  app.post('/api/campaigns/:id/status', need('MANAGER'), ah(async (req, res) => {
-    const c = await getCampaign(req.params.id); const to = req.body?.status;
-    if (!(TRANS[c.status] || []).includes(to)) throw bad(`Cannot change status from ${c.status} to ${to}`, 409);
-    await pool.query('UPDATE feedback_campaigns SET status=$1 WHERE id=$2', [to, c.id]);
-    await audit(req.user.id, 'campaign_status', `${c.id} ${c.status}->${to}`);
-    res.json(await getCampaign(c.id));
-  }));
-  app.put('/api/campaigns/:id/questions', need('MANAGER'), ah(async (req, res) => {
-    const c = await getCampaign(req.params.id); const q = req.body?.questions, out = {};
-    if (!q || typeof q !== 'object') throw bad('questions required');
-    for (const l of LANGS) {
-      if (!Array.isArray(q[l]) || q[l].length !== 6 || q[l].some((t) => typeof t !== 'string' || !t.trim() || t.length > 600)) throw bad(`questions.${l} must be 6 non-empty strings (greeting + 5 questions)`);
-      out[l] = q[l].map((t) => t.trim());
-    }
-    await pool.query('UPDATE feedback_campaigns SET questions=$1 WHERE id=$2', [JSON.stringify(out), c.id]);
-    await audit(req.user.id, 'script_update', c.id);
-    res.json({ ok: true });
-  }));
+  // campaign-scope enforcement (users limited to assigned campaigns get 404 for anything else)
+  const allowed = async (user) => {
+    if (user.scope !== 'assigned' || atLeast(user.role, 'ADMIN')) return null;
+    return new Set((await pool.query('SELECT campaign_id FROM user_campaigns WHERE user_id=$1', [user.id])).rows.map((r) => r.campaign_id));
+  };
+  const needC = (min) => [need(min), ah(async (req, _res, next) => {
+    const al = await allowed(req.user);
+    if (al && !al.has(req.params.id)) { await audit(req.user.id, 'access_denied', `campaign ${req.params.id} outside assigned scope`); throw bad('Campaign not found', 404); }
+    next();
+  })];
+  mountCampaigns(app, { pool, need, needC, audit, ah, bad, getCampaign, allowed, defaultQuestions: DEFAULT_QUESTIONS, withTx });
+  mountUsers(app, { pool, need, audit, ah, bad });
 
   // ---- contacts
-  app.post('/api/campaigns/:id/contacts/validate', need('MANAGER'), ah(async (req, res) => { await getCampaign(req.params.id); const v = validateCsv(req.body?.csv); if (v.fatal) throw bad(v.fatal); res.json({ ...v, rows: v.rows.map((r) => ({ ...r, number: mask(r.number) })) }); }));
-  app.post('/api/campaigns/:id/contacts/import', need('MANAGER'), ah(async (req, res) => {
-    const c = await getCampaign(req.params.id); if (c.status === 'closed') throw bad('Campaign is closed', 409);
+  app.post('/api/campaigns/:id/contacts/validate', needC('MANAGER'), ah(async (req, res) => { await getCampaign(req.params.id); const v = validateCsv(req.body?.csv); if (v.fatal) throw bad(v.fatal); res.json({ ...v, rows: v.rows.map((r) => ({ ...r, number: mask(r.number) })) }); }));
+  app.post('/api/campaigns/:id/contacts/import', needC('MANAGER'), ah(async (req, res) => {
+    const c = await getCampaign(req.params.id); if (c.archived_at) throw bad('Campaign is archived', 409, 'ARCHIVED'); if (c.status === 'closed') throw bad('Campaign is closed', 409);
     const v = validateCsv(req.body?.csv); if (v.fatal) throw bad(v.fatal);
     let inserted = 0, existing = 0;
     for (const r of v.rows) {
@@ -113,13 +83,13 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
     await audit(req.user.id, 'contacts_import', `${c.id} inserted=${inserted} existing=${existing} rejected=${v.errors.length}`);
     res.json({ inserted, already_in_campaign: existing, rejected: v.errors.length, errors: v.errors });
   }));
-  app.get('/api/campaigns/:id/contacts', need('MANAGER'), ah(async (req, res) => {
+  app.get('/api/campaigns/:id/contacts', needC('MANAGER'), ah(async (req, res) => {
     const { pageSize, offset, page } = pageArgs(req.query);
     const total = Number((await pool.query('SELECT COUNT(*) AS n FROM feedback_contacts WHERE campaign_id=$1', [req.params.id])).rows[0].n);
     const { rows } = await pool.query('SELECT id,number,language,locality,permission,permission_at,status FROM feedback_contacts WHERE campaign_id=$1 ORDER BY created_at, id LIMIT $2 OFFSET $3', [req.params.id, pageSize, offset]);
     res.json({ page, pageSize, total, items: rows.map((r) => ({ ...r, number: mask(r.number) })) });
   }));
-  app.get('/api/campaigns/:id/dry-run', need('MANAGER'), ah(async (req, res) => {
+  app.get('/api/campaigns/:id/dry-run', needC('MANAGER'), ah(async (req, res) => {
     const c = await getCampaign(req.params.id);
     const { rows } = await pool.query("SELECT permission,permission_at,number FROM feedback_contacts WHERE campaign_id=$1 AND status='pending'", [c.id]);
     const sup = new Set((await pool.query('SELECT number FROM feedback_suppression_entries')).rows.map((r) => r.number));
@@ -127,8 +97,9 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
     for (const r of rows) { if (!(r.permission === 'granted' && r.permission_at)) out.no_permission++; else if (sup.has(r.number)) out.suppressed++; else out.eligible++; }
     res.json({ ...out, language: c.language, firstPrompt: c.questions[c.language][0], recording: c.recording });
   }));
-  app.post('/api/campaigns/:id/run', need('MANAGER'), ah(async (req, res) => {
+  app.post('/api/campaigns/:id/run', needC('MANAGER'), ah(async (req, res) => {
     const c = await getCampaign(req.params.id);
+    if (c.archived_at) throw bad('Campaign is archived', 409, 'ARCHIVED');
     const limit = intIn(req.body?.limit ?? 50, 1, 500, 'limit');
     const s = await runCampaign({ pool, cfg, campaign: c, telephony, limit });
     await audit(req.user.id, 'campaign_run', `${c.id} provider=${telephony.name} ${JSON.stringify(s.results)}`);
@@ -149,6 +120,8 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
     if (LANGS.includes(req.query.language)) add('c.language=?', req.query.language);
     if (CATS.includes(req.query.category)) add('EXISTS (SELECT 1 FROM feedback_responses r WHERE r.call_id=c.id AND r.category=?)', req.query.category);
     if (req.query.q) add('k.locality LIKE ?', '%' + String(req.query.q).slice(0, 50) + '%');
+    const al = await allowed(req.user);
+    if (al) { if (!al.size) return res.json({ page, pageSize, total: 0, items: [] }); add('c.campaign_id = ANY(?)', [...al]); }
     const where = w.length ? 'WHERE ' + w.join(' AND ') : '';
     const base = `FROM feedback_calls c JOIN feedback_contacts k ON k.id=c.contact_id ${where}`;
     const total = Number((await pool.query(`SELECT COUNT(*) AS n ${base}`, p)).rows[0].n);
@@ -158,13 +131,14 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
   app.get('/api/calls/:id', need('MANAGER'), ah(async (req, res) => {
     const { rows } = await pool.query('SELECT c.*,k.number,k.locality FROM feedback_calls c JOIN feedback_contacts k ON k.id=c.contact_id WHERE c.id=$1', [req.params.id]);
     if (!rows[0]) throw bad('Call not found', 404);
+    const al = await allowed(req.user); if (al && !al.has(rows[0].campaign_id)) throw bad('Call not found', 404);
     const responses = (await pool.query('SELECT question_id,category,transcript,skipped,stt_confidence,classification_status,classification,needs_review FROM feedback_responses WHERE call_id=$1 ORDER BY question_id', [req.params.id])).rows;
     await audit(req.user.id, 'call_view', req.params.id);
     res.json({ ...rows[0], number: mask(rows[0].number), responses });
   }));
 
   // ---- analytics / export
-  app.get('/api/campaigns/:id/analytics', need('VIEWER'), ah(async (req, res) => {
+  app.get('/api/campaigns/:id/analytics', needC('VIEWER'), ah(async (req, res) => {
     const c = await getCampaign(req.params.id);
     const cnt = {}; for (const r of (await pool.query('SELECT outcome, COUNT(*) AS n FROM feedback_calls WHERE campaign_id=$1 GROUP BY outcome', [c.id])).rows) cnt[r.outcome] = Number(r.n);
     const g = (k) => cnt[k] || 0, attempted = Object.values(cnt).reduce((a, b) => a + b, 0), answered = g('completed') + g('declined') + g('opted_out');
@@ -192,7 +166,7 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
         decline: { value: answered ? g('declined') / answered : null, num: g('declined'), den: answered }, opt_out: { value: answered ? g('opted_out') / answered : null, num: g('opted_out'), den: answered } },
       avg_duration_s: Number(agg.n) ? Math.round(Number(agg.d) / Number(agg.n)) : null, categories: cat, sentiment: sent, review_queue: review, unresolved, collected: { from: dates.a, to: dates.b } });
   }));
-  app.get('/api/campaigns/:id/export.csv', need('MANAGER'), ah(async (req, res) => {
+  app.get('/api/campaigns/:id/export.csv', needC('MANAGER'), ah(async (req, res) => {
     const c = await getCampaign(req.params.id);
     const { rows } = await pool.query('SELECT c.id AS call_id,c.outcome,c.language,c.is_mock,k.number,r.question_id,r.category,r.classification,r.skipped FROM feedback_calls c JOIN feedback_contacts k ON k.id=c.contact_id LEFT JOIN feedback_responses r ON r.call_id=c.id WHERE c.campaign_id=$1 ORDER BY c.created_at, c.id, r.question_id', [c.id]);
     const lines = ['call_id,outcome,language,is_mock,number_masked,question_id,category,sentiment,confidence,summary,skipped'];
@@ -207,17 +181,6 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
     { name: 'Text-to-speech', state: cfg.tts === 'mock' ? 'mock' : 'misconfigured' }, { name: 'AI classifier', state: cfg.ai === 'mock' ? 'mock' : 'misconfigured' },
     { name: 'Cloudflare R2 recordings', state: 'not_implemented' }, { name: 'Webhook signing secret', state: cfg.webhookSecret ? 'configured' : 'not_configured' }]));
   app.get('/api/audit', need('ADMIN'), ah(async (_q, r) => r.json((await pool.query('SELECT id,user_id,action,detail,created_at FROM feedback_audit_logs ORDER BY created_at DESC LIMIT 100')).rows)));
-  app.post('/api/users', need('ADMIN'), ah(async (req, res) => {
-    const b = req.body || {}, email = str(b.email, 200, 'email').toLowerCase(), role = b.role;
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw bad('Invalid email');
-    if (!ROLES.includes(role)) throw bad('Invalid role');
-    if (!atLeast(req.user.role, role) || (role === req.user.role && req.user.role !== 'SUPER_ADMIN') || role === 'SUPER_ADMIN' && req.user.role !== 'SUPER_ADMIN') throw bad('You cannot assign that role', 403);
-    if (String(b.password || '').length < 10) throw bad('Password must be at least 10 characters');
-    if ((await pool.query('SELECT 1 FROM users WHERE email=$1', [email])).rows.length) throw bad('Email already exists', 409);
-    const id = newId();
-    await pool.query('INSERT INTO users (id,email,name,password_hash,role) VALUES ($1,$2,$3,$4,$5)', [id, email, str(b.name, 100, 'name', false), hashPassword(b.password), role]);
-    await audit(req.user.id, 'user_create', `${email} ${role}`); res.status(201).json({ id, email, role });
-  }));
 
   // ---- signed, idempotent provider webhook
   app.post('/api/webhooks/telephony', ah(async (req, res) => {
@@ -244,7 +207,7 @@ export function createApp({ pool, cfg, telephony = createMockTelephony() }) {
   app.use('/api', (_q, r) => r.status(404).json({ error: 'Not found' }));
   app.use((err, _req, res, _next) => {
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
-    if (err.expose) return res.status(err.status || 400).json({ error: err.message });
+    if (err.expose) return res.status(err.status || 400).json({ error: err.message, ...(err.code ? { code: err.code } : {}), ...(err.extra || {}) });
     if (err.status && err.status < 500) return res.status(err.status).json({ error: err.message });
     console.error(err); res.status(500).json({ error: 'Internal server error' });
   });
